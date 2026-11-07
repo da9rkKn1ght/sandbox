@@ -1,0 +1,29 @@
+
+services:
+  backend:
+    image: ${NEXUS_REGISTRY}/molchanovdi-backend-docker/sandbox-backend:latest
+    container_name: sandbox-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${BACKEND_PORT:-8081}:8081"
+    networks:
+      - sandbox-network
+
+  frontend:
+    image: ${NEXUS_REGISTRY}/molchanovdi-frontend-docker/sandbox-frontend:latest
+    container_name: sandbox-frontend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+    depends_on:
+      - backend
+    networks:
+      - sandbox-network
+
+networks:
+  sandbox-network:
+    driver: bridge
