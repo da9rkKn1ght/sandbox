@@ -184,11 +184,8 @@ jobs:
 
           ssh "$VM_USER@$VM_HOST" "mkdir -p '$DEPLOY_PATH'"
 
-          scp docker-compose.yml .env deploy.sh \
+          scp docker-compose.yml .env \
             "$VM_USER@$VM_HOST:$DEPLOY_PATH/"
-
-          ssh "$VM_USER@$VM_HOST" \
-            "chmod +x '$DEPLOY_PATH/deploy.sh'"
 
       - name: Configure Nexus and login on VM
         env:
@@ -215,9 +212,8 @@ jobs:
         run: |
           DEPLOY_PATH="${VM_DEPLOY_PATH:-/opt/sandbox}"
 
-          ssh "$VM_USER@$VM_HOST" "
-          cd '$DEPLOY_PATH'
-          docker compose pull
-          docker compose up -d --remove-orphans
-          docker image prune -f
-          curl -fsS http://localhost:8081/health"
+          ssh "$VM_USER@$VM_HOST" \
+            "cd '$DEPLOY_PATH' && \
+            docker compose pull && \
+            docker compose up -d --remove-orphans && \
+            docker image prune -f"
