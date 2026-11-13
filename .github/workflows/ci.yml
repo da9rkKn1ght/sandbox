@@ -1,20 +1,67 @@
 
-name: CI
+name: CI/CD
 
 on:
   push:
     branches:
-      - main
+      - "**"
+
   workflow_dispatch:
+    inputs:
+      VERSION:
+        description: "Версия для повторного деплоя или отката. Оставь пустым для новой сборки."
+        required: false
+        type: string
 
 permissions:
   contents: read
   packages: write
 
 jobs:
-  build-backend:
-    name: Build Backend
+  version:
+    name: Prepare version
     runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      owner: ${{ steps.version.outputs.owner }}
+
+    steps:
+      - name: Calculate version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.VERSION }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+            echo "Using provided version: $VERSION"
+          else
+            VERSION="$(date -u +%Y%m%d-%H%M%S)"
+            echo "Generated version: $VERSION"
+          fi
+
+          OWNER="$(echo "$REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    needs: version
+    concurrency:
+      group: build-${{ github.ref }}-${{ matrix.component }}
+      cancel-in-progress: true
+
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.VERSION == '' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - backend
+          - frontend
 
     steps:
       - name: Checkout
@@ -24,7 +71,9 @@ jobs:
         env:
           NEXUS_REGISTRY: ${{ secrets.NEXUS_REGISTRY }}
         run: |
-          echo "{\"insecure-registries\":[\"$NEXUS_REGISTRY\"]}" | sudo tee /etc/docker/daemon.json
+          echo "{\"insecure-registries\":[\"$NEXUS_REGISTRY\"]}" \
+            | sudo tee /etc/docker/daemon.json
+
           sudo systemctl restart docker
 
       - name: Set up Docker Buildx
@@ -39,7 +88,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Login to Nexus
@@ -49,69 +98,126 @@ jobs:
           username: ${{ secrets.NEXUS_USERNAME }}
           password: ${{ secrets.NEXUS_PASSWORD }}
 
-      - name: Prepare image names
-        id: vars
-        run: |
-          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - name: Prepare image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        env:
+          NEXUS_REPOSITORY: ${{ matrix.component == 'backend' && secrets.NEXUS_BACKEND_REPOSITORY || secrets.NEXUS_FRONTEND_REPOSITORY }}
+        with:
+          images: |
+            ghcr.io/${{ needs.version.outputs.owner }}/sandbox-${{ matrix.component }}
+            ${{ secrets.NEXUS_REGISTRY }}/${{ env.NEXUS_REPOSITORY }}/sandbox-${{ matrix.component }}
+          tags: |
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build and push Backend
+      - name: Build and push ${{ matrix.component }}
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: src/backend/Dockerfile
+          file: src/${{ matrix.component }}/Dockerfile
           push: true
-          tags: |
-            ghcr.io/${{ steps.vars.outputs.owner }}/sandbox-backend:${{ github.sha }}
-            ${{ secrets.NEXUS_REGISTRY }}/${{ secrets.NEXUS_BACKEND_REPOSITORY }}:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
 
-  build-frontend:
-    name: Build Frontend
+  deploy:
+    name: Deploy to VM
     runs-on: ubuntu-latest
+    needs:
+      - version
+      - build
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+
+    if: >-
+      ${{
+        always() &&
+        github.ref == 'refs/heads/main' &&
+        needs.version.result == 'success' &&
+        (needs.build.result == 'success' || needs.build.result == 'skipped')
+      }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure Docker for Nexus
+      - name: Prepare deployment files
         env:
+          APP_ENV_FILE: ${{ secrets.APP_ENV_FILE }}
+          IMAGE_TAG: ${{ needs.version.outputs.version }}
+          IMAGE_REGISTRY: ${{ secrets.NEXUS_REGISTRY }}
+          REPOSITORY_BACKEND: ${{ secrets.NEXUS_BACKEND_REPOSITORY }}
+          REPOSITORY_FRONTEND: ${{ secrets.NEXUS_FRONTEND_REPOSITORY }}
+        run: |
+          {
+            printf '%s\n' "$APP_ENV_FILE"
+            printf '\nIMAGE_REGISTRY=%s\n' "$IMAGE_REGISTRY"
+            printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG"
+            printf 'VERSION=%s\n' "$IMAGE_TAG"
+            printf 'REPOSITORY_BACKEND=%s/sandbox-backend\n' "$REPOSITORY_BACKEND"
+            printf 'REPOSITORY_FRONTEND=%s/sandbox-frontend\n' "$REPOSITORY_FRONTEND"
+          } > .env
+
+      - name: Configure SSH
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts
+
+      - name: Copy deployment files
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_DEPLOY_PATH: ${{ secrets.VM_DEPLOY_PATH }}
+        run: |
+          DEPLOY_PATH="${VM_DEPLOY_PATH:-/opt/sandbox}"
+
+          ssh "$VM_USER@$VM_HOST" "mkdir -p '$DEPLOY_PATH'"
+
+          scp docker-compose.yml .env deploy.sh \
+            "$VM_USER@$VM_HOST:$DEPLOY_PATH/"
+
+          ssh "$VM_USER@$VM_HOST" \
+            "chmod +x '$DEPLOY_PATH/deploy.sh'"
+
+      - name: Configure Nexus and login on VM
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
           NEXUS_REGISTRY: ${{ secrets.NEXUS_REGISTRY }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          echo "{\"insecure-registries\":[\"$NEXUS_REGISTRY\"]}" | sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
+          ssh "$VM_USER@$VM_HOST" \
+            "echo '{\"insecure-registries\":[\"$NEXUS_REGISTRY\"]}' | sudo tee /etc/docker/daemon.json"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          config-inline: |
-            [registry."${{ secrets.NEXUS_REGISTRY }}"]
-              http = true
-              insecure = true
+          ssh "$VM_USER@$VM_HOST" \
+            "sudo systemctl restart docker"
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          printf '%s' "$NEXUS_PASSWORD" | ssh "$VM_USER@$VM_HOST" \
+            "docker login '$NEXUS_REGISTRY' -u '$NEXUS_USERNAME' --password-stdin"
 
-      - name: Login to Nexus
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.NEXUS_REGISTRY }}
-          username: ${{ secrets.NEXUS_USERNAME }}
-          password: ${{ secrets.NEXUS_PASSWORD }}
-
-      - name: Prepare image names
-        id: vars
+      - name: Deploy application
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_DEPLOY_PATH: ${{ secrets.VM_DEPLOY_PATH }}
         run: |
-          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          DEPLOY_PATH="${VM_DEPLOY_PATH:-/opt/sandbox}"
 
-      - name: Build and push Frontend
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: src/frontend/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/${{ steps.vars.outputs.owner }}/sandbox-frontend:${{ github.sha }}
-            ${{ secrets.NEXUS_REGISTRY }}/${{ secrets.NEXUS_FRONTEND_REPOSITORY }}:${{ github.sha }}
+          ssh "$VM_USER@$VM_HOST" "
+          cd '$DEPLOY_PATH'
+          docker compose pull
+          docker compose up -d --remove-orphans
+          docker image prune -f
+          curl -fsS http://localhost:8081/health"
