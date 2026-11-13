@@ -1,7 +1,7 @@
 
 services:
   backend:
-    image: ${NEXUS_REGISTRY}/molchanovdi-backend-docker/sandbox-backend:latest
+    image: ${NEXUS_REGISTRY}/${NEXUS_FRONTEND_REPOSITORY}/sandbox-backend:latest
     container_name: sandbox-backend
     restart: unless-stopped
     env_file:
@@ -12,7 +12,7 @@ services:
       - sandbox-network
 
   frontend:
-    image: ${NEXUS_REGISTRY}/molchanovdi-frontend-docker/sandbox-frontend:latest
+    image: ${NEXUS_REGISTRY}/${NEXUS_BACKEND_REPOSITORY}/sandbox-frontend:latest
     container_name: sandbox-frontend
     restart: unless-stopped
     env_file:
