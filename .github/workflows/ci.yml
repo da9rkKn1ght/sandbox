@@ -146,19 +146,24 @@ jobs:
 
       - name: Prepare deployment files
         env:
-          APP_ENV_FILE: ${{ secrets.APP_ENV_FILE }}
           IMAGE_TAG: ${{ needs.version.outputs.version }}
-          IMAGE_REGISTRY: ${{ secrets.NEXUS_REGISTRY }}
-          REPOSITORY_BACKEND: ${{ secrets.NEXUS_BACKEND_REPOSITORY }}
-          REPOSITORY_FRONTEND: ${{ secrets.NEXUS_FRONTEND_REPOSITORY }}
+          NEXUS_REGISTRY: ${{ secrets.NEXUS_REGISTRY }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          NEXUS_BACKEND_REPOSITORY: ${{ secrets.NEXUS_BACKEND_REPOSITORY }}
+          NEXUS_FRONTEND_REPOSITORY: ${{ secrets.NEXUS_FRONTEND_REPOSITORY }}
         run: |
           {
-            printf '%s\n' "$APP_ENV_FILE"
-            printf '\nIMAGE_REGISTRY=%s\n' "$IMAGE_REGISTRY"
-            printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG"
-            printf 'VERSION=%s\n' "$IMAGE_TAG"
-            printf 'REPOSITORY_BACKEND=%s/sandbox-backend\n' "$REPOSITORY_BACKEND"
-            printf 'REPOSITORY_FRONTEND=%s/sandbox-frontend\n' "$REPOSITORY_FRONTEND"
+            echo "BACKEND_PORT=8081"
+            echo "FRONTEND_PORT=8080"
+            echo "NEXUS_USERNAME=\"$NEXUS_USERNAME\""
+            echo "NEXUS_PASSWORD=\"$NEXUS_PASSWORD\""
+            echo "NEXUS_REGISTRY=\"$NEXUS_REGISTRY\""
+            echo "NEXUS_BACKEND_REPOSITORY=\"$NEXUS_BACKEND_REPOSITORY\""
+            echo "NEXUS_FRONTEND_REPOSITORY=\"$NEXUS_FRONTEND_REPOSITORY\""
+            echo "IMAGE_TAG=$IMAGE_TAG"
+            echo "BACKEND_IMAGE_NAME=sandbox-backend"
+            echo "FRONTEND_IMAGE_NAME=sandbox-frontend"
           } > .env
 
       - name: Configure SSH

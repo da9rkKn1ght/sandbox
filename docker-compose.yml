@@ -1,7 +1,6 @@
-
 services:
   backend:
-    image: ${NEXUS_REGISTRY}/${NEXUS_BACKEND_REPOSITORY}/sandbox-backend:latest
+    image: ${NEXUS_REGISTRY}/${NEXUS_BACKEND_REPOSITORY}/sandbox-backend:${IMAGE_TAG}
     container_name: sandbox-backend
     restart: unless-stopped
     env_file:
@@ -12,7 +11,7 @@ services:
       - sandbox-network
 
   frontend:
-    image: ${NEXUS_REGISTRY}/${NEXUS_FRONTEND_REPOSITORY}/sandbox-frontend:latest
+    image: ${NEXUS_REGISTRY}/${NEXUS_FRONTEND_REPOSITORY}/sandbox-frontend:${IMAGE_TAG}
     container_name: sandbox-frontend
     restart: unless-stopped
     env_file:
