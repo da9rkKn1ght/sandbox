@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     ./cmd/api
 
 
-FROM golang:alpine AS runtime
+FROM scratch AS runtime
 
 WORKDIR /app
 
