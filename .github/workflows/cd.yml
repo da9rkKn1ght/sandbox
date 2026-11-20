@@ -1,0 +1,126 @@
+
+name: CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия Docker-образов для развертывания"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate image version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Invalid Docker image tag: $VERSION"
+            exit 1
+          fi
+
+          echo "Deploying version: $VERSION"
+
+      - name: Install Yandex Cloud CLI
+        run: |
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -a
+          echo "$HOME/yandex-cloud/bin" >> "$GITHUB_PATH"
+
+      - name: Configure yc
+        env:
+          YC_SA_KEY: ${{ secrets.YC_SA_KEY }}
+          YC_FOLDER_ID: ${{ vars.YC_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+
+          install -m 600 /dev/null "$RUNNER_TEMP/yc-sa-key.json"
+          printf '%s' "$YC_SA_KEY" > "$RUNNER_TEMP/yc-sa-key.json"
+
+          yc config profile create ci
+          yc config profile activate ci
+          yc config set service-account-key "$RUNNER_TEMP/yc-sa-key.json"
+          yc config set folder-id "$YC_FOLDER_ID"
+
+          rm -f "$RUNNER_TEMP/yc-sa-key.json"
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+
+      - name: Configure Kubernetes access
+        env:
+          YC_CLUSTER_ID: ${{ vars.YC_CLUSTER_ID }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$HOME/.kube"
+
+          yc managed-kubernetes cluster get-credentials \
+            --id "$YC_CLUSTER_ID" \
+            --external \
+            --force
+
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Check Kubernetes connection
+        run: |
+          set -euo pipefail
+
+          kubectl config current-context
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Validate Helm chart
+        run: |
+          helm lint ./helm/sandbox
+
+      - name: Deploy application
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          helm upgrade --install sandbox ./helm/sandbox \
+            --namespace default \
+            --set-string imageTag="$VERSION" \
+            --wait \
+            --timeout 5m
+
+      - name: Check deployment
+        run: |
+          set -euo pipefail
+
+          kubectl rollout status deployment/sandbox-backend --timeout=180s
+          kubectl rollout status deployment/sandbox-frontend --timeout=180s
+
+          echo "Deployments:"
+          kubectl get deployments
+
+          echo "Pods:"
+          kubectl get pods -o wide
+
+          echo "Services:"
+          kubectl get services

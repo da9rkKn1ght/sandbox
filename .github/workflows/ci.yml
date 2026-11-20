@@ -1,17 +1,10 @@
 
-name: CI/CD
+name: CI
 
 on:
   push:
     branches:
       - "**"
-
-  workflow_dispatch:
-    inputs:
-      VERSION:
-        description: "Версия для повторного деплоя или отката. Оставь пустым для новой сборки."
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -176,107 +169,107 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
 
-  deploy:
-    name: Deploy to VM
-    runs-on: ubuntu-latest
-    needs:
-      - version
-      - test
-      - build
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
+  # deploy:
+  #   name: Deploy to VM
+  #   runs-on: ubuntu-latest
+  #   needs:
+  #     - version
+  #     - test
+  #     - build
+  #   concurrency:
+  #     group: deploy-production
+  #     cancel-in-progress: false
 
-    if: >-
-      ${{
-        always() &&
-        github.ref == 'refs/heads/main' &&
-        needs.version.result == 'success' &&
-        needs.test.result == 'success' &&
-        (needs.build.result == 'success' || needs.build.result == 'skipped')
-      }}
+  #   if: >-
+  #     ${{
+  #       always() &&
+  #       github.ref == 'refs/heads/main' &&
+  #       needs.version.result == 'success' &&
+  #       needs.test.result == 'success' &&
+  #       (needs.build.result == 'success' || needs.build.result == 'skipped')
+  #     }}
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
 
-      - name: Prepare deployment files
-        env:
-          IMAGE_TAG: ${{ needs.version.outputs.version }}
-          NEXUS_REGISTRY: ${{ secrets.NEXUS_REGISTRY }}
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-          NEXUS_BACKEND_REPOSITORY: ${{ secrets.NEXUS_BACKEND_REPOSITORY }}
-          NEXUS_FRONTEND_REPOSITORY: ${{ secrets.NEXUS_FRONTEND_REPOSITORY }}
-        run: |
-          {
-            echo "BACKEND_PORT=8081"
-            echo "FRONTEND_PORT=8080"
-            echo "NEXUS_USERNAME=\"$NEXUS_USERNAME\""
-            echo "NEXUS_PASSWORD=\"$NEXUS_PASSWORD\""
-            echo "NEXUS_REGISTRY=\"$NEXUS_REGISTRY\""
-            echo "NEXUS_BACKEND_REPOSITORY=\"$NEXUS_BACKEND_REPOSITORY\""
-            echo "NEXUS_FRONTEND_REPOSITORY=\"$NEXUS_FRONTEND_REPOSITORY\""
-            echo "IMAGE_TAG=$IMAGE_TAG"
-            echo "BACKEND_IMAGE_NAME=sandbox-backend"
-            echo "FRONTEND_IMAGE_NAME=sandbox-frontend"
-          } > .env
+  #     - name: Prepare deployment files
+  #       env:
+  #         IMAGE_TAG: ${{ needs.version.outputs.version }}
+  #         NEXUS_REGISTRY: ${{ secrets.NEXUS_REGISTRY }}
+  #         NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+  #         NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+  #         NEXUS_BACKEND_REPOSITORY: ${{ secrets.NEXUS_BACKEND_REPOSITORY }}
+  #         NEXUS_FRONTEND_REPOSITORY: ${{ secrets.NEXUS_FRONTEND_REPOSITORY }}
+  #       run: |
+  #         {
+  #           echo "BACKEND_PORT=8081"
+  #           echo "FRONTEND_PORT=8080"
+  #           echo "NEXUS_USERNAME=\"$NEXUS_USERNAME\""
+  #           echo "NEXUS_PASSWORD=\"$NEXUS_PASSWORD\""
+  #           echo "NEXUS_REGISTRY=\"$NEXUS_REGISTRY\""
+  #           echo "NEXUS_BACKEND_REPOSITORY=\"$NEXUS_BACKEND_REPOSITORY\""
+  #           echo "NEXUS_FRONTEND_REPOSITORY=\"$NEXUS_FRONTEND_REPOSITORY\""
+  #           echo "IMAGE_TAG=$IMAGE_TAG"
+  #           echo "BACKEND_IMAGE_NAME=sandbox-backend"
+  #           echo "FRONTEND_IMAGE_NAME=sandbox-frontend"
+  #         } > .env
 
-      - name: Configure SSH
-        env:
-          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
-          VM_HOST: ${{ secrets.VM_HOST }}
-        run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
+  #     - name: Configure SSH
+  #       env:
+  #         VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+  #         VM_HOST: ${{ secrets.VM_HOST }}
+  #       run: |
+  #         mkdir -p ~/.ssh
+  #         chmod 700 ~/.ssh
 
-          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
+  #         printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/id_ed25519
+  #         chmod 600 ~/.ssh/id_ed25519
 
-          printf '%s\n' "$VM_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+  #         printf '%s\n' "$VM_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+  #         chmod 600 ~/.ssh/known_hosts
 
 
-      - name: Copy deployment files
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          VM_USER: ${{ secrets.VM_USER }}
-          VM_DEPLOY_PATH: ${{ secrets.VM_DEPLOY_PATH }}
-        run: |
-          DEPLOY_PATH="${VM_DEPLOY_PATH:-/opt/sandbox}"
+  #     - name: Copy deployment files
+  #       env:
+  #         VM_HOST: ${{ secrets.VM_HOST }}
+  #         VM_USER: ${{ secrets.VM_USER }}
+  #         VM_DEPLOY_PATH: ${{ secrets.VM_DEPLOY_PATH }}
+  #       run: |
+  #         DEPLOY_PATH="${VM_DEPLOY_PATH:-/opt/sandbox}"
 
-          ssh "$VM_USER@$VM_HOST" "mkdir -p '$DEPLOY_PATH'"
+  #         ssh "$VM_USER@$VM_HOST" "mkdir -p '$DEPLOY_PATH'"
 
-          scp docker-compose.yml .env \
-            "$VM_USER@$VM_HOST:$DEPLOY_PATH/"
+  #         scp docker-compose.yml .env \
+  #           "$VM_USER@$VM_HOST:$DEPLOY_PATH/"
 
-      - name: Configure Nexus and login on VM
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          VM_USER: ${{ secrets.VM_USER }}
-          NEXUS_REGISTRY: ${{ secrets.NEXUS_REGISTRY }}
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          ssh "$VM_USER@$VM_HOST" \
-            "echo '{\"insecure-registries\":[\"$NEXUS_REGISTRY\"]}' | sudo tee /etc/docker/daemon.json"
+  #     - name: Configure Nexus and login on VM
+  #       env:
+  #         VM_HOST: ${{ secrets.VM_HOST }}
+  #         VM_USER: ${{ secrets.VM_USER }}
+  #         NEXUS_REGISTRY: ${{ secrets.NEXUS_REGISTRY }}
+  #         NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+  #         NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+  #       run: |
+  #         ssh "$VM_USER@$VM_HOST" \
+  #           "echo '{\"insecure-registries\":[\"$NEXUS_REGISTRY\"]}' | sudo tee /etc/docker/daemon.json"
 
-          ssh "$VM_USER@$VM_HOST" \
-            "sudo systemctl restart docker"
+  #         ssh "$VM_USER@$VM_HOST" \
+  #           "sudo systemctl restart docker"
 
-          printf '%s' "$NEXUS_PASSWORD" | ssh "$VM_USER@$VM_HOST" \
-            "docker login '$NEXUS_REGISTRY' -u '$NEXUS_USERNAME' --password-stdin"
+  #         printf '%s' "$NEXUS_PASSWORD" | ssh "$VM_USER@$VM_HOST" \
+  #           "docker login '$NEXUS_REGISTRY' -u '$NEXUS_USERNAME' --password-stdin"
 
-      - name: Deploy application
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          VM_USER: ${{ secrets.VM_USER }}
-          VM_DEPLOY_PATH: ${{ secrets.VM_DEPLOY_PATH }}
-        run: |
-          DEPLOY_PATH="${VM_DEPLOY_PATH:-/opt/sandbox}"
+  #     - name: Deploy application
+  #       env:
+  #         VM_HOST: ${{ secrets.VM_HOST }}
+  #         VM_USER: ${{ secrets.VM_USER }}
+  #         VM_DEPLOY_PATH: ${{ secrets.VM_DEPLOY_PATH }}
+  #       run: |
+  #         DEPLOY_PATH="${VM_DEPLOY_PATH:-/opt/sandbox}"
 
-          ssh "$VM_USER@$VM_HOST" \
-            "cd '$DEPLOY_PATH' && \
-            docker compose pull && \
-            docker compose up -d --remove-orphans && \
-            docker image prune -f"
+  #         ssh "$VM_USER@$VM_HOST" \
+  #           "cd '$DEPLOY_PATH' && \
+  #           docker compose pull && \
+  #           docker compose up -d --remove-orphans && \
+  #           docker image prune -f"
