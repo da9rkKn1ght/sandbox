@@ -91,7 +91,6 @@ jobs:
 
           kubectl config current-context
           kubectl cluster-info
-          kubectl get nodes
 
       - name: Validate Helm chart
         run: |
@@ -113,14 +112,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          kubectl rollout status deployment/sandbox-backend --timeout=180s
-          kubectl rollout status deployment/sandbox-frontend --timeout=180s
+          kubectl rollout status deployment/sandbox-backend -n default --timeout=180s
+          kubectl rollout status deployment/sandbox-frontend -n default --timeout=180s
 
-          echo "Deployments:"
-          kubectl get deployments
-
-          echo "Pods:"
-          kubectl get pods -o wide
-
-          echo "Services:"
-          kubectl get services
+          kubectl get deployments -n default
+          kubectl get pods -n default
+          kubectl get services -n default
