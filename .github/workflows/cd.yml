@@ -2,6 +2,12 @@
 name: CD
 
 on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
   workflow_dispatch:
     inputs:
       version:
@@ -20,16 +26,31 @@ jobs:
   deploy:
     name: Deploy to Kubernetes
     runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success')
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - name: Validate image version
+      - name: Prepare image version
+        id: version
         env:
-          VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="sha-${SOURCE_SHA:0:7}"
+          fi
 
           if [[ ! "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
             echo "Invalid Docker image tag: $VERSION"
@@ -37,6 +58,7 @@ jobs:
           fi
 
           echo "Deploying version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Install Yandex Cloud CLI
         run: |
@@ -98,7 +120,7 @@ jobs:
 
       - name: Deploy application
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
 
